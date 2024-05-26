@@ -11,53 +11,22 @@ use string_cache::DefaultAtom as Atom;
 
 macro_rules! enum_number {
     ($name:ident { $($variant:ident | $display:tt | $value:tt, )* }) => {
-        /// TypeItem represent an item with type,
-        /// Use `Display` or `fmt_url` to get the `type dot name` format of the item.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use rustdoc_seeker::TypeItem;
-        /// # use string_cache::Atom;
-        /// assert_eq!(format!("{}", TypeItem::Module(Atom::from("vec"))), "module.vec");
-        /// assert_eq!(format!("{}", TypeItem::Macro(Atom::from("vec"))), "macro.vec");
-        /// // the only two exceptions
-        /// assert_eq!(format!("{}", TypeItem::Function(Atom::from("vec"))), "fn.vec");
-        /// assert_eq!(format!("{}", TypeItem::Typedef(Atom::from("vec"))), "type.vec");
-        /// ```
-        #[derive(Clone, Debug, Eq, PartialEq)]
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub enum $name {
-            $($variant(Atom),)*
+            $($variant,)*
         }
 
         impl $name {
-            pub fn new(tag: usize, data: Atom) -> $name {
-                match tag {
-                    $( $value => $name::$variant(data), )*
-                    _ => unreachable!()
-                }
-            }
-        }
-
-        impl AsRef<Atom> for $name {
-            fn as_ref(&self) -> &Atom {
+            fn as_str(&self) -> &'static str {
                 match self {
-                    $( $name::$variant(data) => data, )*
-                }
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                match self {
-                    $( $name::$variant(data) => write!(f, "{}.{}", $display, data), )*
+                    $( $name::$variant => $display, )*
                 }
             }
         }
     }
 }
 
-enum_number!(TypeItem {
+enum_number!(DocItemKind {
     Module          | "module"          | 0,
     ExternCrate     | "externcrate"     | 1,
     Import          | "import"          | 2,
@@ -67,12 +36,15 @@ enum_number!(TypeItem {
     Typedef         | "type"            | 6,
     Static          | "static"          | 7,
     Trait           | "trait"           | 8,
+    TraitAlias      | "traitalias"      | 23,
     Impl            | "impl"            | 9,
     TyMethod        | "tymethod"        | 10,
     Method          | "method"          | 11,
     StructField     | "structfield"     | 12,
     Variant         | "variant"         | 13,
     Macro           | "macro"           | 14,
+    AttributeMacro  | "attr"            | 24,
+    DeriveMacro     | "derive"          | 25,
     Primitive       | "primitive"       | 15,
     AssociatedType  | "associatedtype"  | 16,
     Constant        | "constant"        | 17,
@@ -83,65 +55,117 @@ enum_number!(TypeItem {
     Existential     | "existential"     | 22,
 });
 
-/// DocItem represent a searchable item,
-/// use `Display` to get the relative URI of the item.
+/// TypeItem represent an item with type,
+/// Use `Display` or `fmt_url` to get the `type dot name` format of the item.
 ///
 /// # Example
 ///
 /// ```
-/// # use rustdoc_seeker::{DocItem, TypeItem};
+/// # use rustdoc_seeker::TypeItem;
 /// # use string_cache::Atom;
-/// #
-/// # let vec_dedup = DocItem {
-/// #     name: TypeItem::Function(Atom::from("dedup")),
-/// #     parent: Some(TypeItem::Struct(Atom::from("Vec"))),
-/// #     path: Atom::from("std::vec"),
-/// #     desc: Atom::from(""),
-/// # };
-/// // `vec_dedup` is the `DocItem` for `std::vec::Vec::dedup`.
-/// assert_eq!(format!("{}", vec_dedup), "std/vec/struct.Vec.html#fn.dedup");
-///
-/// # let vec_struct = DocItem {
-/// #     name: TypeItem::Struct(Atom::from("Vec")),
-/// #     parent: None,
-/// #     path: Atom::from("std::vec"),
-/// #     desc: Atom::from(""),
-/// # };
-/// // `vec_struct` is the `DocItem` for `std::vec::Vec`.
-/// assert_eq!(format!("{}", vec_struct), "std/vec/struct.Vec.html");
-///
-/// # let vec_macro = DocItem {
-/// #     name: TypeItem::Macro(Atom::from("vec")),
-/// #     parent: None,
-/// #     path: Atom::from("std"),
-/// #     desc: Atom::from(""),
-/// # };
-/// // `vec_macro` is the `DocItem` for `std::vec` macro.
-/// assert_eq!(format!("{}", vec_macro), "std/macro.vec.html");
+/// use rustdoc_seeker::DocItemKind::*;
+/// assert_eq!(
+///     format!("{}", TypeItem {
+///         kind: Module,
+///         name: Atom::from("vec")
+///     }),
+///     "module.vec"
+/// );
+/// assert_eq!(
+///     format!("{}", TypeItem {
+///         kind: Macro,
+///         name: Atom::from("vec")
+///     }),
+///     "macro.vec"
+/// );
+/// // the only two exceptions
+/// assert_eq!(
+///     format!("{}", TypeItem {
+///         kind: Function,
+///         name: Atom::from("vec")
+///     }),
+///     "fn.vec"
+/// );
+/// assert_eq!(
+///     format!("{}", TypeItem {
+///         kind: Typedef,
+///         name: Atom::from("vec")
+///     }),
+///     "type.vec"
+/// );
 /// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TypeItem {
+    pub kind: DocItemKind,
+    pub name: Atom,
+}
+
+impl fmt::Display for TypeItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}.{}", self.kind.as_str(), self.name)
+    }
+}
+
+/// DocItem represent a searchable item,
+/// use `Display` to get the relative URI of the item.
 #[derive(Debug, Eq)]
 pub struct DocItem {
-    pub name: TypeItem,
-    pub parent: Option<TypeItem>,
-    pub path: Atom,
-    pub desc: Atom,
+    pub(crate) name: TypeItem,
+    pub(crate) link_type: LinkType,
+    pub(crate) path: Atom,
+    pub(crate) desc: Atom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LinkType {
+    /// `/std/net/index.html`
+    Index,
+    /// `/std/net/struct.TcpStream.html`
+    Page,
+    /// `/std/net/struct.TcpStream.html#method.connect`
+    AssociateItem {
+        /// `struct.TcpStream`
+        page_item: TypeItem,
+    },
+    /// `/crossterm/style/enum.Color.html#variant.Rgb.field.r`
+    SubAssociateItem {
+        /// `enum.Color`
+        page_item: TypeItem,
+        /// `variant.Rgb`
+        parent: TypeItem,
+    },
+    // FIXME: how to generate fragment for impl blocks?
 }
 
 impl DocItem {
-    pub fn new(name: TypeItem, parent: Option<TypeItem>, path: Atom, desc: Atom) -> DocItem {
-        DocItem {
-            name,
-            parent,
-            path,
-            desc,
-        }
+    /// The identifier of the item, e.g. `TcpStream`.
+    pub fn name(&self) -> &str {
+        &self.name.name
+    }
+
+    /// The type of the item.
+    pub fn kind(&self) -> DocItemKind {
+        self.name.kind
+    }
+
+    /// The documentation string of the item
+    pub fn desc(&self) -> &str {
+        &self.desc
     }
 
     pub fn fmt_naive<W: fmt::Write>(&self, f: &mut W) -> fmt::Result {
         write!(f, "{}::", self.path)?;
-        if let Some(ref parent) = self.parent {
-            write!(f, "{}::", parent)?;
-        };
+        match &self.link_type {
+            LinkType::Index => (),
+            LinkType::Page => (),
+            LinkType::AssociateItem {
+                page_item,
+            } => write!(f, "{}::", &*page_item.name)?,
+            LinkType::SubAssociateItem {
+                page_item,
+                parent,
+            } => write!(f, "{}::{}::", &*page_item.name, &*parent.name)?,
+        }
         write!(f, "{}", self.name)
     }
 
@@ -149,28 +173,42 @@ impl DocItem {
         for part in self.path.split("::") {
             write!(f, "{}/", part)?;
         }
-        if let Some(ref parent) = self.parent {
-            write!(f, "{}.html#{}", parent, self.name)
-        } else {
-            match &self.name {
-                TypeItem::Module(name) => write!(f, "{}/index.html", name),
-                _ => write!(f, "{}.html", self.name),
-            }
-        }
+        match &self.link_type {
+            LinkType::Index => write!(f, "{}/index.html", self.name.name),
+            LinkType::Page => write!(f, "{}.html", self.name),
+            LinkType::AssociateItem {
+                page_item,
+            } => write!(f, "{}.html#{}", page_item, self.name),
+            LinkType::SubAssociateItem {
+                page_item,
+                parent,
+            } => {
+                write!(f, "{}.html#{}.{}", page_item, parent, self.name)
+            },
+        }?;
+        Ok(())
     }
 
     fn parent_atom(&self) -> Option<&Atom> {
-        self.parent.as_ref().map(|p| p.as_ref())
+        match &self.link_type {
+            LinkType::Index | LinkType::Page => None,
+            LinkType::AssociateItem {
+                page_item,
+            } => Some(&page_item.name),
+            LinkType::SubAssociateItem {
+                page_item, ..
+            } => Some(&page_item.name),
+        }
     }
 
     fn index_key(&self) -> &[u8] {
-        self.name.as_ref().as_bytes()
+        self.name.name.as_bytes()
     }
 }
 
 impl PartialEq for DocItem {
     fn eq(&self, other: &DocItem) -> bool {
-        self.name == other.name && self.parent == other.parent && self.path == other.path
+        self.name == other.name && self.link_type == other.link_type && self.path == other.path
     }
 }
 
@@ -202,7 +240,7 @@ impl fmt::Display for DocItem {
 /// ```
 /// # use rustdoc_seeker::RustDoc;
 /// # use std::fs;
-/// let data = fs::read_to_string("search-index.js")?;
+/// let data = fs::read_to_string("doc-json/std.json")?;
 /// let rustdoc: RustDoc = data.parse()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -212,13 +250,13 @@ pub struct RustDoc {
 }
 
 impl Extend<DocItem> for RustDoc {
-    fn extend<T: IntoIterator<Item = DocItem>>(&mut self, iter: T) {
+    fn extend<T: IntoIterator<Item=DocItem>>(&mut self, iter: T) {
         self.items.extend(iter);
     }
 }
 
 impl FromIterator<DocItem> for RustDoc {
-    fn from_iter<I: IntoIterator<Item = DocItem>>(iter: I) -> Self {
+    fn from_iter<I: IntoIterator<Item=DocItem>>(iter: I) -> Self {
         RustDoc {
             items: iter.into_iter().collect(),
         }
@@ -236,10 +274,12 @@ impl IntoIterator for RustDoc {
 
 impl RustDoc {
     pub fn new(items: BTreeSet<DocItem>) -> RustDoc {
-        RustDoc { items }
+        RustDoc {
+            items,
+        }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &DocItem> {
+    pub fn iter(&self) -> impl Iterator<Item=&DocItem> {
         self.items.iter()
     }
 
@@ -254,7 +294,7 @@ impl RustDoc {
             let groups = items
                 .iter()
                 .enumerate()
-                .group_by(|(_, item)| item.index_key());
+                .chunk_by(|(_, item)| item.index_key());
 
             for (key, mut group) in groups.into_iter() {
                 let (start, _) = group.next().unwrap();
@@ -266,7 +306,10 @@ impl RustDoc {
         }
 
         let index = builder.into_map();
-        RustDocSeeker { items, index }
+        RustDocSeeker {
+            items,
+            index,
+        }
     }
 }
 
@@ -296,51 +339,45 @@ impl RustDocSeeker {
     ///
     /// ```
     /// # use rustdoc_seeker::RustDoc;
-    /// # let rustdoc: RustDoc = std::fs::read_to_string("search-index.js")?.parse()?;
+    /// # let rustdoc: RustDoc = std::fs::read_to_string("doc-json/alloc.json")?.parse()?;
     /// # let seeker = rustdoc.build();
     /// let aut = regex_automata::DenseDFA::new(".*dedup.*").unwrap();
     /// assert_eq!(
-    ///     seeker.search(&aut).map(|item| format!("{}", item)).collect::<Vec<_>>(),
+    ///     seeker
+    ///         .search(&aut)
+    ///         .map(|item| format!("{}", item))
+    ///         .collect::<Vec<_>>(),
     ///     vec![
     ///         "alloc/vec/struct.Vec.html#method.dedup",
-    ///         "std/vec/struct.Vec.html#method.dedup",
     ///         "alloc/vec/struct.Vec.html#method.dedup_by",
-    ///         "std/vec/struct.Vec.html#method.dedup_by",
-    ///         "alloc/vec/struct.Vec.html#method.dedup_by_key",
-    ///         "std/vec/struct.Vec.html#method.dedup_by_key",
-    ///         "std/primitive.slice.html#method.partition_dedup",
-    ///         "std/primitive.slice.html#method.partition_dedup_by",
-    ///         "std/primitive.slice.html#method.partition_dedup_by_key",
+    ///         "alloc/vec/struct.Vec.html#method.dedup_by_key"
     ///     ],
     /// );
     ///
     /// let aut = fst::automaton::Levenshtein::new("dedXp", 1).unwrap();
     /// assert_eq!(
-    ///     seeker.search(&aut).map(|item| format!("{}", item)).collect::<Vec<_>>(),
-    ///     vec![
-    ///         "alloc/vec/struct.Vec.html#method.dedup",
-    ///         "std/vec/struct.Vec.html#method.dedup",
-    ///     ],
+    ///     seeker
+    ///         .search(&aut)
+    ///         .map(|item| format!("{}", item))
+    ///         .collect::<Vec<_>>(),
+    ///     vec!["alloc/vec/struct.Vec.html#method.dedup",],
     /// );
     ///
     /// let aut = fst::automaton::Subsequence::new("dedup");
     /// assert_eq!(
-    ///     seeker.search(&aut).map(|item| format!("{}", item)).collect::<Vec<_>>(),
+    ///     seeker
+    ///         .search(&aut)
+    ///         .map(|item| format!("{}", item))
+    ///         .collect::<Vec<_>>(),
     ///     vec![
     ///         "alloc/vec/struct.Vec.html#method.dedup",
-    ///         "std/vec/struct.Vec.html#method.dedup",
     ///         "alloc/vec/struct.Vec.html#method.dedup_by",
-    ///         "std/vec/struct.Vec.html#method.dedup_by",
     ///         "alloc/vec/struct.Vec.html#method.dedup_by_key",
-    ///         "std/vec/struct.Vec.html#method.dedup_by_key",
-    ///         "std/primitive.slice.html#method.partition_dedup",
-    ///         "std/primitive.slice.html#method.partition_dedup_by",
-    ///         "std/primitive.slice.html#method.partition_dedup_by_key",
     ///     ],
     /// );
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn search<A: Automaton>(&self, aut: &A) -> impl Iterator<Item = &DocItem> {
+    pub fn search<A: Automaton>(&self, aut: &A) -> impl Iterator<Item=&DocItem> {
         let result = self.index.search(aut).into_stream().into_values();
 
         result.into_iter().flat_map(move |idx| {

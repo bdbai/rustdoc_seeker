@@ -6,9 +6,26 @@ use regex_automata::DenseDFA;
 use rustdoc_seeker::RustDoc;
 use std::fs;
 
+const DOC_JSON_PATHS: [&str; 3] = [
+    "doc-json/core.json",
+    "doc-json/alloc.json",
+    "doc-json/std.json",
+];
+
 fn main() {
-    let data = fs::read_to_string("search-index.js").unwrap();
-    let rustdoc: RustDoc = data.parse().unwrap();
+    let rustdoc = DOC_JSON_PATHS
+        .into_iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .expect(&format!("Failed to read file {}", path))
+                .parse()
+                .expect(&format!("Failed to parse file {path}"))
+        })
+        .reduce(|mut all_docs: RustDoc, current_doc| {
+            all_docs.extend(current_doc);
+            all_docs
+        })
+        .expect("At least one rustdoc file must be provided");
     let seeker = rustdoc.build();
 
     let dfa = DenseDFA::new(".*dedup.*").unwrap();
